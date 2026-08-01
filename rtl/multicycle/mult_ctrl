@@ -1,0 +1,180 @@
+`timescale 1ns / 1ps
+
+module mult_ctrl(
+    input  wire [7:0] uPC,
+
+    output reg        IRLd,
+    output reg [2:0]  RegSel,
+    output reg        RegWr,
+    output reg        RegEn,
+    output reg        ALd,
+    output reg        BLd,
+    output reg [2:0]  ALUOp,
+    output reg        ALUEn,
+    output reg        MALd,
+    output reg        MemWr,
+    output reg        MemEn,
+    output reg [2:0]  ImmSel,
+    output reg        ImmEn
+);
+
+always @(*) begin
+    IRLd   = 0;
+    RegSel = 3'b000;
+    RegWr  = 0;
+    RegEn  = 0;
+    ALd    = 0;
+    BLd    = 0;
+    ALUOp  = 3'b000;
+    ALUEn  = 0;
+    MALd   = 0;
+    MemWr  = 0;
+    MemEn  = 0;
+    ImmSel = 3'b000;
+    ImmEn  = 0;
+
+    case (uPC)
+
+        // FETCH
+        8'd0: begin
+            RegSel = 3'b000; // PC
+            RegEn  = 1;
+            MALd   = 1;      // PC -> MA
+        end
+
+        8'd1: begin
+            MemEn = 1;
+            IRLd  = 1;       // MEM[MA] -> IR
+        end
+
+        // ADD: rd = rs1 + rs2
+        8'd10: begin
+            RegSel = 3'b011; RegEn = 1; ALd = 1;
+        end
+        8'd11: begin
+            RegSel = 3'b100; RegEn = 1; BLd = 1;
+        end
+        8'd12: begin
+            ALUOp = 3'b000; ALUEn = 1;
+            RegSel = 3'b010; RegWr = 1;
+        end
+
+        // SUB: rd = rs1 - rs2
+        8'd14: begin
+            RegSel = 3'b011; RegEn = 1; ALd = 1;
+        end
+        8'd15: begin
+            RegSel = 3'b100; RegEn = 1; BLd = 1;
+        end
+        8'd16: begin
+            ALUOp = 3'b001; ALUEn = 1;
+            RegSel = 3'b010; RegWr = 1;
+        end
+
+        // ADDI: rd = rs1 + imm
+        8'd20: begin
+            RegSel = 3'b011; RegEn = 1; ALd = 1;
+        end
+        8'd21: begin
+            ImmSel = 3'b000; ImmEn = 1; BLd = 1;
+        end
+        8'd22: begin
+            ALUOp = 3'b000; ALUEn = 1;
+            RegSel = 3'b010; RegWr = 1;
+        end
+
+        // XORI: rd = rs1 ^ imm
+        8'd24: begin
+            RegSel = 3'b011; RegEn = 1; ALd = 1;
+        end
+        8'd25: begin
+            ImmSel = 3'b000; ImmEn = 1; BLd = 1;
+        end
+        8'd26: begin
+            ALUOp = 3'b100; ALUEn = 1;
+            RegSel = 3'b010; RegWr = 1;
+        end
+
+        // LW: rd = MEM[rs1 + imm]
+        8'd30: begin
+            RegSel = 3'b011; RegEn = 1; ALd = 1;
+        end
+        8'd31: begin
+            ImmSel = 3'b000; ImmEn = 1; BLd = 1;
+        end
+        8'd32: begin
+            ALUOp = 3'b000; ALUEn = 1; MALd = 1;
+        end
+        8'd33: begin
+            MemEn = 1;
+            RegSel = 3'b010; RegWr = 1;
+        end
+
+        // SW: MEM[rs1 + imm] = rs2
+        8'd40: begin
+            RegSel = 3'b011; RegEn = 1; ALd = 1;
+        end
+        8'd41: begin
+            ImmSel = 3'b001; ImmEn = 1; BLd = 1;
+        end
+        8'd42: begin
+            ALUOp = 3'b000; ALUEn = 1; MALd = 1;
+        end
+        8'd43: begin
+            RegSel = 3'b100; RegEn = 1;
+            MemWr  = 1;
+        end
+
+        // BNE
+        8'd50: begin
+            RegSel = 3'b011; RegEn = 1; ALd = 1;
+        end
+        8'd51: begin
+            RegSel = 3'b100; RegEn = 1; BLd = 1;
+        end
+        8'd52: begin
+            ALUOp = 3'b001; ALUEn = 1; BLd = 1;
+        end
+        8'd53: begin
+            RegSel = 3'b000; RegEn = 1; ALd = 1;
+        end
+        8'd54: begin
+            ImmSel = 3'b010; ImmEn = 1; BLd = 1;
+        end
+        8'd55: begin
+            ALUOp = 3'b000; ALUEn = 1;
+            RegSel = 3'b000; RegWr = 1;
+        end
+
+        // JAL
+        8'd70: begin
+            RegSel = 3'b000; RegEn = 1; ALd = 1;
+        end
+        8'd71: begin
+            ALUOp = 3'b101; ALUEn = 1;
+            RegSel = 3'b010; RegWr = 1;
+        end
+        8'd72: begin
+            RegSel = 3'b000; RegEn = 1; ALd = 1;
+        end
+        8'd73: begin
+            ImmSel = 3'b100; ImmEn = 1; BLd = 1;
+        end
+        8'd74: begin
+            ALUOp = 3'b000; ALUEn = 1;
+            RegSel = 3'b000; RegWr = 1;
+        end
+
+        // PC = PC + 4
+        8'd60: begin
+            RegSel = 3'b000; RegEn = 1; ALd = 1;
+        end
+        8'd61: begin
+            ALUOp = 3'b101; ALUEn = 1;
+            RegSel = 3'b000; RegWr = 1;
+        end
+
+    endcase
+end
+
+endmodule
