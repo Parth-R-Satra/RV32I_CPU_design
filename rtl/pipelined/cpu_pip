@@ -1,0 +1,258 @@
+`timescale 1ns / 1ps
+
+module cpu_pip;
+
+reg clk;
+reg reset;
+
+// IF
+wire [31:0] pc_out, pc_plus4, pc_next, instruction;
+
+// IF/ID
+reg [31:0] IFID_pc;
+reg [31:0] IFID_instruction;
+
+// ID
+wire RegWrite, ALUSrc, MemWrite, MemRead, MemToReg;
+wire Branch, BranchType, Jump;
+wire [3:0] ALUOp;
+wire [1:0] ImmSel;
+
+wire [4:0] rs1, rs2, rd;
+wire [31:0] rdata1, rdata2, immOut;
+
+// ID/EX
+reg [31:0] IDEX_pc;
+reg [31:0] IDEX_rdata1, IDEX_rdata2;
+reg [31:0] IDEX_imm;
+reg [4:0]  IDEX_rd;
+
+reg [3:0]  IDEX_ALUOp;
+reg        IDEX_ALUSrc;
+reg        IDEX_MemRead;
+reg        IDEX_MemWrite;
+reg        IDEX_RegWrite;
+reg        IDEX_MemToReg;
+reg        IDEX_Branch;
+reg        IDEX_BranchType;
+reg        IDEX_Jump;
+
+// EX
+wire [31:0] aluB;
+wire [31:0] aluResult;
+wire zero;
+wire equal;
+wire branch_taken;
+wire [31:0] pc_target;
+
+// EX/MEM
+reg [31:0] EXMEM_aluResult;
+reg [31:0] EXMEM_storeData;
+reg [31:0] EXMEM_pcPlus4;
+reg [4:0]  EXMEM_rd;
+
+reg        EXMEM_MemRead;
+reg        EXMEM_MemWrite;
+reg        EXMEM_RegWrite;
+reg        EXMEM_MemToReg;
+reg        EXMEM_Jump;
+
+// MEM
+wire [31:0] memReadData;
+
+// MEM/WB
+reg [31:0] MEMWB_memData;
+reg [31:0] MEMWB_aluResult;
+reg [31:0] MEMWB_pcPlus4;
+reg [4:0]  MEMWB_rd;
+
+reg        MEMWB_RegWrite;
+reg        MEMWB_MemToReg;
+reg        MEMWB_Jump;
+
+// WB
+wire [31:0] writeBackData;
+
+assign rs1 = IFID_instruction[19:15];
+assign rs2 = IFID_instruction[24:20];
+assign rd  = IFID_instruction[11:7];
+
+// ---------------- IF Stage ----------------
+
+reg32 PC (
+    .clk(clk),
+    .reset(reset),
+    .we(1'b1),
+    .d(pc_next),
+    .q(pc_out)
+);
+
+PCInc pc_inc (
+    .oldPC(pc_out),
+    .newPC(pc_plus4)
+);
+
+BankedMEM IMEM (
+    .clk(clk),
+    .writeEn(1'b0),
+    .address(pc_out),
+    .writeData(32'b0),
+    .readData(instruction)
+);
+
+// branch/jump resolved in EX stage
+assign pc_next = (branch_taken || IDEX_Jump) ? pc_target : pc_plus4;
+
+// ---------------- ID Stage ----------------
+
+ControlUnit cu (
+    .instruction(IFID_instruction),
+    .RegWrite(RegWrite),
+    .ALUSrc(ALUSrc),
+    .MemWrite(MemWrite),
+    .MemRead(MemRead),
+    .MemToReg(MemToReg),
+    .Branch(Branch),
+    .BranchType(BranchType),
+    .Jump(Jump),
+    .ALUOp(ALUOp),
+    .ImmSel(ImmSel)
+);
+
+reg_file rf (
+    .clk(clk),
+    .reset(reset),
+    .reg_write_en(MEMWB_RegWrite),
+    .rs1(rs1),
+    .rs2(rs2),
+    .rd(MEMWB_rd),
+    .wdata(writeBackData),
+    .rdata1(rdata1),
+    .rdata2(rdata2)
+);
+
+immGen ig (
+    .immSel(ImmSel),
+    .instruction(IFID_instruction),
+    .immOut(immOut)
+);
+
+// ---------------- EX Stage ----------------
+
+assign aluB = IDEX_ALUSrc ? IDEX_imm : IDEX_rdata2;
+
+rv32ialu alu (
+    .A(IDEX_rdata1),
+    .B(aluB),
+    .ctrl(IDEX_ALUOp),
+    .Y(aluResult),
+    .zero(zero)
+);
+
+assign equal = (IDEX_rdata1 == IDEX_rdata2);
+
+assign branch_taken = IDEX_Branch &&
+                     ((IDEX_BranchType == 1'b0 && equal) ||
+                      (IDEX_BranchType == 1'b1 && !equal));
+
+assign pc_target = IDEX_pc + IDEX_imm;
+
+// ---------------- MEM Stage ----------------
+
+BankedMEM DMEM (
+    .clk(clk),
+    .writeEn(EXMEM_MemWrite),
+    .address(EXMEM_aluResult),
+    .writeData(EXMEM_storeData),
+    .readData(memReadData)
+);
+
+// ---------------- WB Stage ----------------
+
+assign writeBackData = MEMWB_Jump ? MEMWB_pcPlus4 :
+                       MEMWB_MemToReg ? MEMWB_memData :
+                                        MEMWB_aluResult;
+
+// ---------------- Pipeline Registers ----------------
+
+always @(posedge clk) begin
+    if (reset) begin
+        IFID_pc <= 32'b0;
+        IFID_instruction <= 32'b0;
+
+        IDEX_pc <= 32'b0;
+        IDEX_rdata1 <= 32'b0;
+        IDEX_rdata2 <= 32'b0;
+        IDEX_imm <= 32'b0;
+        IDEX_rd <= 5'b0;
+        IDEX_ALUOp <= 4'b1111;
+        IDEX_ALUSrc <= 1'b0;
+        IDEX_MemRead <= 1'b0;
+        IDEX_MemWrite <= 1'b0;
+        IDEX_RegWrite <= 1'b0;
+        IDEX_MemToReg <= 1'b0;
+        IDEX_Branch <= 1'b0;
+        IDEX_BranchType <= 1'b0;
+        IDEX_Jump <= 1'b0;
+
+        EXMEM_aluResult <= 32'b0;
+        EXMEM_storeData <= 32'b0;
+        EXMEM_pcPlus4 <= 32'b0;
+        EXMEM_rd <= 5'b0;
+        EXMEM_MemRead <= 1'b0;
+        EXMEM_MemWrite <= 1'b0;
+        EXMEM_RegWrite <= 1'b0;
+        EXMEM_MemToReg <= 1'b0;
+        EXMEM_Jump <= 1'b0;
+
+        MEMWB_memData <= 32'b0;
+        MEMWB_aluResult <= 32'b0;
+        MEMWB_pcPlus4 <= 32'b0;
+        MEMWB_rd <= 5'b0;
+        MEMWB_RegWrite <= 1'b0;
+        MEMWB_MemToReg <= 1'b0;
+        MEMWB_Jump <= 1'b0;
+    end else begin
+        // IF/ID
+        IFID_pc <= pc_out;
+        IFID_instruction <= instruction;
+
+        // ID/EX
+        IDEX_pc <= IFID_pc;
+        IDEX_rdata1 <= rdata1;
+        IDEX_rdata2 <= rdata2;
+        IDEX_imm <= immOut;
+        IDEX_rd <= rd;
+        IDEX_ALUOp <= ALUOp;
+        IDEX_ALUSrc <= ALUSrc;
+        IDEX_MemRead <= MemRead;
+        IDEX_MemWrite <= MemWrite;
+        IDEX_RegWrite <= RegWrite;
+        IDEX_MemToReg <= MemToReg;
+        IDEX_Branch <= Branch;
+        IDEX_BranchType <= BranchType;
+        IDEX_Jump <= Jump;
+
+        // EX/MEM
+        EXMEM_aluResult <= aluResult;
+        EXMEM_storeData <= IDEX_rdata2;
+        EXMEM_pcPlus4 <= IDEX_pc + 32'd4;
+        EXMEM_rd <= IDEX_rd;
+        EXMEM_MemRead <= IDEX_MemRead;
+        EXMEM_MemWrite <= IDEX_MemWrite;
+        EXMEM_RegWrite <= IDEX_RegWrite;
+        EXMEM_MemToReg <= IDEX_MemToReg;
+        EXMEM_Jump <= IDEX_Jump;
+
+        // MEM/WB
+        MEMWB_memData <= memReadData;
+        MEMWB_aluResult <= EXMEM_aluResult;
+        MEMWB_pcPlus4 <= EXMEM_pcPlus4;
+        MEMWB_rd <= EXMEM_rd;
+        MEMWB_RegWrite <= EXMEM_RegWrite;
+        MEMWB_MemToReg <= EXMEM_MemToReg;
+        MEMWB_Jump <= EXMEM_Jump;
+    end
+end
+
+endmodule
