@@ -1,0 +1,19 @@
+`timescale 1ns / 1ps
+
+module PCInc(
+    input  [31:0] oldPC,
+    output [31:0] newPC
+);
+
+wire posovf, negovf;
+
+aluaddsub pc_adder (
+    .A(oldPC),
+    .B(32'd4),
+    .sub_ctrl(1'b0),      // ADD
+    .result(newPC),
+    .posovf(posovf),
+    .negovf(negovf)
+);
+
+endmodule
