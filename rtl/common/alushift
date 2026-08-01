@@ -1,0 +1,14 @@
+`timescale 1ns / 1ps
+
+module alushift(
+
+input [31:0]A,B,
+input op,
+output [31:0]Y
+    );
+    
+    wire [4:0] x;
+    assign x = B[4:0];
+    assign #2 Y = op?(A>>x):(A<<x);
+    
+endmodule
