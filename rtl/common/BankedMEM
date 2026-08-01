@@ -1,0 +1,33 @@
+`timescale 1ns / 1ps
+
+module BankedMEM(
+    input clk,
+    input writeEn,
+    input [31:0] address,
+    input [31:0] writeData,
+    output [31:0] readData
+);
+
+reg [7:0] b0 [0:1023];
+reg [7:0] b1 [0:1023];
+reg [7:0] b2 [0:1023];
+reg [7:0] b3 [0:1023];
+
+wire [9:0] word_addr;
+
+assign word_addr = address[11:2];
+
+// asynchronous read
+assign readData = {b3[word_addr], b2[word_addr], b1[word_addr], b0[word_addr]};
+
+// synchronous write
+always @(posedge clk) begin
+    if (writeEn) begin
+        b0[word_addr] <= writeData[7:0];
+        b1[word_addr] <= writeData[15:8];
+        b2[word_addr] <= writeData[23:16];
+        b3[word_addr] <= writeData[31:24];
+    end
+end
+
+endmodule
