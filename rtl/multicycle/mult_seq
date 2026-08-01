@@ -1,0 +1,106 @@
+`timescale 1ns / 1ps
+
+module mult_seq(
+    input  wire        clk,
+    input  wire        rst,
+    input  wire [6:0]  opcode,
+    input  wire [2:0]  funct3,
+    input  wire [6:0]  funct7,
+    input  wire        zero,
+    input  wire        busy,
+    output reg [7:0]   uPC
+);
+
+always @(posedge clk or posedge rst) begin
+    if (rst)
+        uPC <= 8'd0;
+    else begin
+        case (uPC)
+
+            // FETCH
+            8'd0: uPC <= 8'd1;   // PC -> MA
+            8'd1: uPC <= 8'd2;   // MEM -> IR
+            8'd2: begin          // DECODE after IR is stable
+                case(opcode)
+                    7'b0110011: begin
+                        case(funct3)
+                            3'b000: uPC <= funct7[5] ? 8'd14 : 8'd10; // SUB / ADD
+                            default: uPC <= 8'd10;
+                        endcase
+                    end
+
+                    7'b0010011: begin
+                        case(funct3)
+                            3'b000: uPC <= 8'd20; // ADDI
+                            3'b100: uPC <= 8'd24; // XORI
+                            default: uPC <= 8'd20;
+                        endcase
+                    end
+
+                    7'b0000011: uPC <= 8'd30; // LW
+                    7'b0100011: uPC <= 8'd40; // SW
+                    7'b1100011: uPC <= 8'd50; // BNE
+                    7'b1101111: uPC <= 8'd70; // JAL
+
+                    default: uPC <= 8'd60;
+                endcase
+            end
+
+            // ADD
+            8'd10: uPC <= 8'd11;
+            8'd11: uPC <= 8'd12;
+            8'd12: uPC <= 8'd60;
+
+            // SUB
+            8'd14: uPC <= 8'd15;
+            8'd15: uPC <= 8'd16;
+            8'd16: uPC <= 8'd60;
+
+            // ADDI
+            8'd20: uPC <= 8'd21;
+            8'd21: uPC <= 8'd22;
+            8'd22: uPC <= 8'd60;
+
+            // XORI
+            8'd24: uPC <= 8'd25;
+            8'd25: uPC <= 8'd26;
+            8'd26: uPC <= 8'd60;
+
+            // LW
+            8'd30: uPC <= 8'd31;
+            8'd31: uPC <= 8'd32;
+            8'd32: uPC <= busy ? 8'd32 : 8'd33;
+            8'd33: uPC <= 8'd60;
+
+            // SW
+            8'd40: uPC <= 8'd41;
+            8'd41: uPC <= 8'd42;
+            8'd42: uPC <= 8'd43;
+            8'd43: uPC <= busy ? 8'd43 : 8'd60;
+
+            // BNE
+            8'd50: uPC <= 8'd51;
+            8'd51: uPC <= 8'd52;
+            8'd52: uPC <= 8'd53;              // wait for B = A-B
+            8'd53: uPC <= zero ? 8'd60 : 8'd54;
+            8'd54: uPC <= 8'd55;
+            8'd55: uPC <= 8'd0;
+
+            // JAL
+            8'd70: uPC <= 8'd71;
+            8'd71: uPC <= 8'd72;
+            8'd72: uPC <= 8'd73;
+            8'd73: uPC <= 8'd74;
+            8'd74: uPC <= 8'd0;
+
+            // PC = PC + 4
+            8'd60: uPC <= 8'd61;
+            8'd61: uPC <= 8'd0;
+
+            default: uPC <= 8'd0;
+
+        endcase
+    end
+end
+
+endmodule
