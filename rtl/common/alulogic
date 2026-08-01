@@ -1,0 +1,13 @@
+`timescale 1ns / 1ps
+
+module alulogic(
+
+input [31:0]A,B,
+input op,
+output [31:0] Y
+
+    );
+    
+    assign #1 Y = op?(A|B):(A&B);
+    
+endmodule
