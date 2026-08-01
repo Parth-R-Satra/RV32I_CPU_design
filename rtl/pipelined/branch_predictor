@@ -1,0 +1,81 @@
+`timescale 1ns / 1ps
+
+module branch_predictor #(
+    parameter ENTRIES    = 16,
+    parameter INDEX_BITS = 4
+)(
+    input  wire        clk,
+    input  wire        reset,
+
+    // Current instruction being fetched
+    input  wire [31:0] query_pc,
+
+    // Prediction for current query PC
+    output wire        predict_taken,
+    output wire [1:0]  query_state,
+
+    // Update from the branch resolved in EX
+    input  wire        update_en,
+    input  wire [31:0] update_pc,
+    input  wire        actual_taken
+);
+
+    /*
+        Two-bit counter states:
+
+        00 = strongly not taken
+        01 = weakly not taken
+        10 = weakly taken
+        11 = strongly taken
+    */
+
+    reg [1:0] bht [0:ENTRIES-1];
+
+    wire [INDEX_BITS-1:0] query_index;
+    wire [INDEX_BITS-1:0] update_index;
+
+    integer i;
+
+    // Ignore bits [1:0] because instructions are word-aligned.
+    assign query_index  = query_pc[INDEX_BITS+1:2];
+    assign update_index = update_pc[INDEX_BITS+1:2];
+
+    assign query_state   = bht[query_index];
+    assign predict_taken = query_state[1];
+
+    always @(posedge clk) begin
+        if (reset) begin
+
+            // Initialize all entries to weakly not taken.
+            for (i = 0; i < ENTRIES; i = i + 1) begin
+                bht[i] <= 2'b01;
+            end
+
+        end
+        else if (update_en) begin
+
+            if (actual_taken) begin
+                // Increment unless already strongly taken.
+                case (bht[update_index])
+                    2'b00: bht[update_index] <= 2'b01;
+                    2'b01: bht[update_index] <= 2'b10;
+                    2'b10: bht[update_index] <= 2'b11;
+                    2'b11: bht[update_index] <= 2'b11;
+                    default: bht[update_index] <= 2'b01;
+                endcase
+            end
+            else begin
+                // Decrement unless already strongly not taken.
+                case (bht[update_index])
+                    2'b00: bht[update_index] <= 2'b00;
+                    2'b01: bht[update_index] <= 2'b00;
+                    2'b10: bht[update_index] <= 2'b01;
+                    2'b11: bht[update_index] <= 2'b10;
+                    default: bht[update_index] <= 2'b01;
+                endcase
+            end
+
+        end
+    end
+
+endmodule
