@@ -1,0 +1,62 @@
+`timescale 1ns / 1ps
+
+module rv32ialu(
+    input  signed [31:0] A,
+    input  signed [31:0] B,
+    input  [3:0] ctrl,
+    output signed [31:0] Y,
+    output zero
+);
+
+wire signed [31:0] addsub_y;
+wire signed [31:0] logic_y;
+wire signed [31:0] shift_y;
+wire signed [31:0] comp_y;
+wire signed [31:0] xor_y;
+
+wire posovf, negovf;
+
+aluaddsub u_addsub (
+    .A(A),
+    .B(B),
+    .sub_ctrl(ctrl == 4'b0000),   // 0000 = SUB, 0001 = ADD
+    .result(addsub_y),
+    .posovf(posovf),
+    .negovf(negovf)
+);
+
+alulogic u_logic (
+    .A(A),
+    .B(B),
+    .op(ctrl[0]),                 // 0010 = AND, 0011 = OR
+    .Y(logic_y)
+);
+
+alushift u_shift (
+    .A(A),
+    .B(B),
+    .op(ctrl[0]),                 // 0100 = SLL, 0101 = SRL
+    .Y(shift_y)
+);
+
+alucomp u_comp (
+    .A(A),
+    .B(B),
+    .Y(comp_y)
+);
+
+assign #1 xor_y = A ^ B;
+
+assign #1 Y = (ctrl == 4'b0000) ? addsub_y :
+              (ctrl == 4'b0001) ? addsub_y :
+              (ctrl == 4'b0010) ? logic_y  :
+              (ctrl == 4'b0011) ? logic_y  :
+              (ctrl == 4'b0100) ? shift_y  :
+              (ctrl == 4'b0101) ? shift_y  :
+              (ctrl == 4'b0110) ? comp_y   :
+              (ctrl == 4'b0111) ? xor_y    :
+                                   32'd0;
+
+assign zero = (Y == 32'd0);
+
+endmodule
