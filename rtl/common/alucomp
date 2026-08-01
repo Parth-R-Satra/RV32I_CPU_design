@@ -1,0 +1,22 @@
+`timescale 1ns / 1ps
+
+module alucomp(
+
+input signed [31:0]A,B,
+output signed [31:0]Y
+
+    );
+ 
+ wire posovf,negovf,overflow,less;
+ wire signed [31:0]sub_result;
+ 
+ aluaddsub uut(
+ .A(A),.B(B),.sub_ctrl(1'b1),.result(sub_result),.posovf(posovf),.negovf(negovf)
+ );
+ 
+ assign overflow = posovf|negovf;   
+ 
+ assign #1 less  = sub_result[31]^overflow;
+ 
+ assign Y = less?(32'd1):(32'd0);
+endmodule
