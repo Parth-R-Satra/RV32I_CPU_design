@@ -1,0 +1,679 @@
+`timescale 1ns / 1ps
+
+module cpu_pip_bpred;
+
+reg clk;
+reg reset;
+
+// ============================================================
+// IF STAGE
+// ============================================================
+
+wire [31:0] pc_out;
+wire [31:0] pc_plus4;
+wire [31:0] pc_next;
+wire [31:0] instruction;
+
+wire stall;
+wire flush;
+wire mispredict;
+
+// IF-stage instruction classification
+wire if_is_branch;
+wire if_is_jal;
+
+// IF-stage immediates and predicted target
+wire [31:0] if_branch_imm;
+wire [31:0] if_jal_imm;
+wire [31:0] if_pred_target;
+
+wire [31:0] predicted_pc_next;
+
+// Branch predictor output
+wire       bht_predict_taken;
+wire [1:0] bht_query_state;
+
+wire if_pred_taken;
+
+// ============================================================
+// IF/ID PIPELINE REGISTER
+// ============================================================
+
+reg [31:0] IFID_pc;
+reg [31:0] IFID_instruction;
+
+reg        IFID_pred_taken;
+reg [31:0] IFID_pred_target;
+
+// ============================================================
+// ID STAGE
+// ============================================================
+
+wire RegWrite;
+wire ALUSrc;
+wire MemWrite;
+wire MemRead;
+wire MemToReg;
+
+wire Branch;
+wire BranchType;
+wire Jump;
+
+wire [3:0] ALUOp;
+wire [1:0] ImmSel;
+
+wire [4:0] rs1;
+wire [4:0] rs2;
+wire [4:0] rd;
+
+wire [31:0] rdata1;
+wire [31:0] rdata2;
+wire [31:0] immOut;
+
+wire [31:0] id_rdata1;
+wire [31:0] id_rdata2;
+
+// ============================================================
+// ID/EX PIPELINE REGISTER
+// ============================================================
+
+reg [31:0] IDEX_pc;
+reg [31:0] IDEX_rdata1;
+reg [31:0] IDEX_rdata2;
+reg [31:0] IDEX_imm;
+
+reg [4:0] IDEX_rs1;
+reg [4:0] IDEX_rs2;
+reg [4:0] IDEX_rd;
+
+reg [3:0] IDEX_ALUOp;
+
+reg IDEX_ALUSrc;
+reg IDEX_MemRead;
+reg IDEX_MemWrite;
+reg IDEX_RegWrite;
+reg IDEX_MemToReg;
+reg IDEX_Branch;
+reg IDEX_BranchType;
+reg IDEX_Jump;
+
+// Prediction made when this instruction was fetched
+reg        IDEX_pred_taken;
+reg [31:0] IDEX_pred_target;
+
+// ============================================================
+// EX STAGE
+// ============================================================
+
+wire [1:0] ForwardA;
+wire [1:0] ForwardB;
+
+wire [31:0] EXMEM_forwardData;
+wire [31:0] forwardedA;
+wire [31:0] forwardedB;
+
+wire [31:0] aluB;
+wire [31:0] aluResult;
+
+wire zero;
+wire equal;
+wire branch_taken;
+
+wire [31:0] pc_target;
+
+// Actual control-flow result
+wire actual_control_taken;
+wire [31:0] actual_control_target;
+
+wire target_mismatch;
+wire [31:0] recovery_pc;
+
+// ============================================================
+// EX/MEM PIPELINE REGISTER
+// ============================================================
+
+reg [31:0] EXMEM_aluResult;
+reg [31:0] EXMEM_storeData;
+reg [31:0] EXMEM_pcPlus4;
+
+reg [4:0] EXMEM_rd;
+
+reg EXMEM_MemRead;
+reg EXMEM_MemWrite;
+reg EXMEM_RegWrite;
+reg EXMEM_MemToReg;
+reg EXMEM_Jump;
+
+// ============================================================
+// MEM STAGE
+// ============================================================
+
+wire [31:0] memReadData;
+
+// ============================================================
+// MEM/WB PIPELINE REGISTER
+// ============================================================
+
+reg [31:0] MEMWB_memData;
+reg [31:0] MEMWB_aluResult;
+reg [31:0] MEMWB_pcPlus4;
+
+reg [4:0] MEMWB_rd;
+
+reg MEMWB_RegWrite;
+reg MEMWB_MemToReg;
+reg MEMWB_Jump;
+
+// ============================================================
+// WB STAGE
+// ============================================================
+
+wire [31:0] writeBackData;
+
+// ============================================================
+// ID-STAGE INSTRUCTION FIELDS
+// ============================================================
+
+assign rs1 = IFID_instruction[19:15];
+assign rs2 = IFID_instruction[24:20];
+assign rd  = IFID_instruction[11:7];
+
+// ============================================================
+// IF-STAGE INSTRUCTION DECODING
+// ============================================================
+
+assign if_is_branch = (instruction[6:0] == 7'b1100011);
+assign if_is_jal    = (instruction[6:0] == 7'b1101111);
+
+// B-type immediate
+assign if_branch_imm = {
+    {19{instruction[31]}},
+    instruction[31],
+    instruction[7],
+    instruction[30:25],
+    instruction[11:8],
+    1'b0
+};
+
+// J-type immediate
+assign if_jal_imm = {
+    {11{instruction[31]}},
+    instruction[31],
+    instruction[19:12],
+    instruction[20],
+    instruction[30:21],
+    1'b0
+};
+
+// Conditional branches use the BHT.
+// JAL is always predicted taken.
+assign if_pred_taken =
+       if_is_jal ||
+       (if_is_branch && bht_predict_taken);
+
+assign if_pred_target =
+       pc_out +
+       (if_is_jal ? if_jal_imm : if_branch_imm);
+
+assign predicted_pc_next =
+       if_pred_taken
+       ? if_pred_target
+       : pc_plus4;
+
+// ============================================================
+// TWO-BIT BRANCH PREDICTOR
+// ============================================================
+
+branch_predictor #(
+    .ENTRIES(16),
+    .INDEX_BITS(4)
+) BP (
+    .clk(clk),
+    .reset(reset),
+
+    .query_pc(pc_out),
+    .predict_taken(bht_predict_taken),
+    .query_state(bht_query_state),
+
+    // Only conditional branches update the BHT.
+    .update_en(IDEX_Branch),
+    .update_pc(IDEX_pc),
+    .actual_taken(branch_taken)
+);
+
+// ============================================================
+// IF STAGE
+// ============================================================
+
+reg32 PC (
+    .clk(clk),
+    .reset(reset),
+
+    /*
+        Freeze for load-use hazards.
+
+        A misprediction has higher priority and must redirect
+        the PC even if another stall condition exists.
+    */
+    .we((~stall) | flush),
+
+    .d(pc_next),
+    .q(pc_out)
+);
+
+PCInc pc_inc (
+    .oldPC(pc_out),
+    .newPC(pc_plus4)
+);
+
+BankedMEM IMEM (
+    .clk(clk),
+    .writeEn(1'b0),
+    .address(pc_out),
+    .writeData(32'b0),
+    .readData(instruction)
+);
+
+// Use the predicted PC unless EX detects a misprediction.
+assign pc_next =
+       flush
+       ? recovery_pc
+       : predicted_pc_next;
+
+// ============================================================
+// ID STAGE
+// ============================================================
+
+ControlUnit cu (
+    .instruction(IFID_instruction),
+    .RegWrite(RegWrite),
+    .ALUSrc(ALUSrc),
+    .MemWrite(MemWrite),
+    .MemRead(MemRead),
+    .MemToReg(MemToReg),
+    .Branch(Branch),
+    .BranchType(BranchType),
+    .Jump(Jump),
+    .ALUOp(ALUOp),
+    .ImmSel(ImmSel)
+);
+
+reg_file rf (
+    .clk(clk),
+    .reset(reset),
+    .reg_write_en(MEMWB_RegWrite),
+    .rs1(rs1),
+    .rs2(rs2),
+    .rd(MEMWB_rd),
+    .wdata(writeBackData),
+    .rdata1(rdata1),
+    .rdata2(rdata2)
+);
+
+immGen ig (
+    .immSel(ImmSel),
+    .instruction(IFID_instruction),
+    .immOut(immOut)
+);
+
+// ============================================================
+// WB-TO-ID BYPASS
+// ============================================================
+
+assign id_rdata1 =
+       (
+           MEMWB_RegWrite &&
+           (MEMWB_rd != 5'b0) &&
+           (MEMWB_rd == rs1)
+       )
+       ? writeBackData
+       : rdata1;
+
+assign id_rdata2 =
+       (
+           MEMWB_RegWrite &&
+           (MEMWB_rd != 5'b0) &&
+           (MEMWB_rd == rs2)
+       )
+       ? writeBackData
+       : rdata2;
+
+// ============================================================
+// LOAD-USE HAZARD DETECTION
+// ============================================================
+
+hazard_detection_unit HDU (
+    .IDEX_MemRead(IDEX_MemRead),
+    .IDEX_rd(IDEX_rd),
+    .IFID_instruction(IFID_instruction),
+    .stall(stall)
+);
+
+// ============================================================
+// FORWARDING UNIT
+// ============================================================
+
+forwarding_unit FU (
+    .EXMEM_RegWrite(EXMEM_RegWrite),
+    .EXMEM_MemToReg(EXMEM_MemToReg),
+    .EXMEM_rd(EXMEM_rd),
+
+    .MEMWB_RegWrite(MEMWB_RegWrite),
+    .MEMWB_rd(MEMWB_rd),
+
+    .IDEX_rs1(IDEX_rs1),
+    .IDEX_rs2(IDEX_rs2),
+
+    .ForwardA(ForwardA),
+    .ForwardB(ForwardB)
+);
+
+assign EXMEM_forwardData =
+       EXMEM_Jump
+       ? EXMEM_pcPlus4
+       : EXMEM_aluResult;
+
+assign forwardedA =
+       (ForwardA == 2'b10) ? EXMEM_forwardData :
+       (ForwardA == 2'b01) ? writeBackData :
+                             IDEX_rdata1;
+
+assign forwardedB =
+       (ForwardB == 2'b10) ? EXMEM_forwardData :
+       (ForwardB == 2'b01) ? writeBackData :
+                             IDEX_rdata2;
+
+// ============================================================
+// EX STAGE
+// ============================================================
+
+assign aluB =
+       IDEX_ALUSrc
+       ? IDEX_imm
+       : forwardedB;
+
+rv32ialu alu (
+    .A(forwardedA),
+    .B(aluB),
+    .ctrl(IDEX_ALUOp),
+    .Y(aluResult),
+    .zero(zero)
+);
+
+// Branch comparison uses forwarded operands.
+assign equal = (forwardedA == forwardedB);
+
+assign branch_taken =
+       IDEX_Branch &&
+       (
+           (IDEX_BranchType == 1'b0 && equal) ||
+           (IDEX_BranchType == 1'b1 && !equal)
+       );
+
+assign pc_target = IDEX_pc + IDEX_imm;
+
+// Conditional branch may be taken or not taken.
+// JAL is always actually taken.
+assign actual_control_taken =
+       branch_taken || IDEX_Jump;
+
+assign actual_control_target = pc_target;
+
+// A target mismatch is included for completeness.
+assign target_mismatch =
+       actual_control_taken &&
+       IDEX_pred_taken &&
+       (IDEX_pred_target != actual_control_target);
+
+// Misprediction occurs when:
+//
+// 1. Predicted direction differs from actual direction, or
+// 2. Both predict taken, but target addresses differ.
+assign mispredict =
+       (IDEX_Branch || IDEX_Jump) &&
+       (
+           (IDEX_pred_taken != actual_control_taken) ||
+           target_mismatch
+       );
+
+assign flush = mispredict;
+
+// If actually taken, recover to the branch/jump target.
+// If actually not taken, recover to PC + 4.
+assign recovery_pc =
+       actual_control_taken
+       ? actual_control_target
+       : (IDEX_pc + 32'd4);
+
+// ============================================================
+// MEM STAGE
+// ============================================================
+
+BankedMEM DMEM (
+    .clk(clk),
+    .writeEn(EXMEM_MemWrite),
+    .address(EXMEM_aluResult),
+    .writeData(EXMEM_storeData),
+    .readData(memReadData)
+);
+
+// ============================================================
+// WB STAGE
+// ============================================================
+
+assign writeBackData =
+       MEMWB_Jump     ? MEMWB_pcPlus4 :
+       MEMWB_MemToReg ? MEMWB_memData :
+                        MEMWB_aluResult;
+
+// ============================================================
+// PIPELINE REGISTERS
+// ============================================================
+
+always @(posedge clk) begin
+
+    if (reset) begin
+
+        // ---------------- IF/ID reset ----------------
+
+        IFID_pc          <= 32'b0;
+        IFID_instruction <= 32'b0;
+
+        IFID_pred_taken  <= 1'b0;
+        IFID_pred_target <= 32'b0;
+
+        // ---------------- ID/EX reset ----------------
+
+        IDEX_pc         <= 32'b0;
+        IDEX_rdata1     <= 32'b0;
+        IDEX_rdata2     <= 32'b0;
+        IDEX_imm        <= 32'b0;
+
+        IDEX_rs1        <= 5'b0;
+        IDEX_rs2        <= 5'b0;
+        IDEX_rd         <= 5'b0;
+
+        IDEX_ALUOp      <= 4'b1111;
+        IDEX_ALUSrc     <= 1'b0;
+        IDEX_MemRead    <= 1'b0;
+        IDEX_MemWrite   <= 1'b0;
+        IDEX_RegWrite   <= 1'b0;
+        IDEX_MemToReg   <= 1'b0;
+        IDEX_Branch     <= 1'b0;
+        IDEX_BranchType <= 1'b0;
+        IDEX_Jump       <= 1'b0;
+
+        IDEX_pred_taken  <= 1'b0;
+        IDEX_pred_target <= 32'b0;
+
+        // ---------------- EX/MEM reset ----------------
+
+        EXMEM_aluResult <= 32'b0;
+        EXMEM_storeData <= 32'b0;
+        EXMEM_pcPlus4   <= 32'b0;
+        EXMEM_rd        <= 5'b0;
+
+        EXMEM_MemRead   <= 1'b0;
+        EXMEM_MemWrite  <= 1'b0;
+        EXMEM_RegWrite  <= 1'b0;
+        EXMEM_MemToReg  <= 1'b0;
+        EXMEM_Jump      <= 1'b0;
+
+        // ---------------- MEM/WB reset ----------------
+
+        MEMWB_memData   <= 32'b0;
+        MEMWB_aluResult <= 32'b0;
+        MEMWB_pcPlus4   <= 32'b0;
+        MEMWB_rd        <= 5'b0;
+
+        MEMWB_RegWrite  <= 1'b0;
+        MEMWB_MemToReg  <= 1'b0;
+        MEMWB_Jump      <= 1'b0;
+
+    end
+    else begin
+
+        // ====================================================
+        // IF/ID PIPELINE REGISTER
+        // ====================================================
+
+        if (flush) begin
+
+            // Remove the incorrectly fetched instruction.
+            IFID_pc          <= 32'b0;
+            IFID_instruction <= 32'b0;
+
+            IFID_pred_taken  <= 1'b0;
+            IFID_pred_target <= 32'b0;
+
+        end
+        else if (!stall) begin
+
+            IFID_pc          <= pc_out;
+            IFID_instruction <= instruction;
+
+            IFID_pred_taken  <= if_pred_taken;
+            IFID_pred_target <= if_pred_target;
+
+        end
+
+        // During stall, IF/ID retains its current contents.
+
+        // ====================================================
+        // ID/EX PIPELINE REGISTER
+        // ====================================================
+
+        if (flush) begin
+
+            // Insert a bubble following a misprediction.
+
+            IDEX_pc         <= 32'b0;
+            IDEX_rdata1     <= 32'b0;
+            IDEX_rdata2     <= 32'b0;
+            IDEX_imm        <= 32'b0;
+
+            IDEX_rs1        <= 5'b0;
+            IDEX_rs2        <= 5'b0;
+            IDEX_rd         <= 5'b0;
+
+            IDEX_ALUOp      <= 4'b1111;
+            IDEX_ALUSrc     <= 1'b0;
+            IDEX_MemRead    <= 1'b0;
+            IDEX_MemWrite   <= 1'b0;
+            IDEX_RegWrite   <= 1'b0;
+            IDEX_MemToReg   <= 1'b0;
+            IDEX_Branch     <= 1'b0;
+            IDEX_BranchType <= 1'b0;
+            IDEX_Jump       <= 1'b0;
+
+            IDEX_pred_taken  <= 1'b0;
+            IDEX_pred_target <= 32'b0;
+
+        end
+        else if (stall) begin
+
+            // Insert a load-use bubble.
+
+            IDEX_pc         <= 32'b0;
+            IDEX_rdata1     <= 32'b0;
+            IDEX_rdata2     <= 32'b0;
+            IDEX_imm        <= 32'b0;
+
+            IDEX_rs1        <= 5'b0;
+            IDEX_rs2        <= 5'b0;
+            IDEX_rd         <= 5'b0;
+
+            IDEX_ALUOp      <= 4'b1111;
+            IDEX_ALUSrc     <= 1'b0;
+            IDEX_MemRead    <= 1'b0;
+            IDEX_MemWrite   <= 1'b0;
+            IDEX_RegWrite   <= 1'b0;
+            IDEX_MemToReg   <= 1'b0;
+            IDEX_Branch     <= 1'b0;
+            IDEX_BranchType <= 1'b0;
+            IDEX_Jump       <= 1'b0;
+
+            IDEX_pred_taken  <= 1'b0;
+            IDEX_pred_target <= 32'b0;
+
+        end
+        else begin
+
+            // Normal ID-to-EX transfer.
+
+            IDEX_pc     <= IFID_pc;
+            IDEX_rdata1 <= id_rdata1;
+            IDEX_rdata2 <= id_rdata2;
+            IDEX_imm    <= immOut;
+
+            IDEX_rs1 <= rs1;
+            IDEX_rs2 <= rs2;
+            IDEX_rd  <= rd;
+
+            IDEX_ALUOp      <= ALUOp;
+            IDEX_ALUSrc     <= ALUSrc;
+            IDEX_MemRead    <= MemRead;
+            IDEX_MemWrite   <= MemWrite;
+            IDEX_RegWrite   <= RegWrite;
+            IDEX_MemToReg   <= MemToReg;
+            IDEX_Branch     <= Branch;
+            IDEX_BranchType <= BranchType;
+            IDEX_Jump       <= Jump;
+
+            IDEX_pred_taken  <= IFID_pred_taken;
+            IDEX_pred_target <= IFID_pred_target;
+
+        end
+
+        // ====================================================
+        // EX/MEM PIPELINE REGISTER
+        // ====================================================
+
+        EXMEM_aluResult <= aluResult;
+        EXMEM_storeData <= forwardedB;
+        EXMEM_pcPlus4   <= IDEX_pc + 32'd4;
+        EXMEM_rd        <= IDEX_rd;
+
+        EXMEM_MemRead   <= IDEX_MemRead;
+        EXMEM_MemWrite  <= IDEX_MemWrite;
+        EXMEM_RegWrite  <= IDEX_RegWrite;
+        EXMEM_MemToReg  <= IDEX_MemToReg;
+        EXMEM_Jump      <= IDEX_Jump;
+
+        // ====================================================
+        // MEM/WB PIPELINE REGISTER
+        // ====================================================
+
+        MEMWB_memData   <= memReadData;
+        MEMWB_aluResult <= EXMEM_aluResult;
+        MEMWB_pcPlus4   <= EXMEM_pcPlus4;
+        MEMWB_rd        <= EXMEM_rd;
+
+        MEMWB_RegWrite  <= EXMEM_RegWrite;
+        MEMWB_MemToReg  <= EXMEM_MemToReg;
+        MEMWB_Jump      <= EXMEM_Jump;
+
+    end
+end
+
+endmodule
