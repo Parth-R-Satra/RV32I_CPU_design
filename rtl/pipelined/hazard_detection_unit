@@ -1,0 +1,118 @@
+`timescale 1ns / 1ps
+
+module hazard_detection_unit (
+    input  wire        IDEX_MemRead,
+    input  wire [4:0]  IDEX_rd,
+    input  wire [31:0] IFID_instruction,
+
+    output reg         stall
+);
+
+    wire [6:0] opcode;
+    wire [4:0] IFID_rs1;
+    wire [4:0] IFID_rs2;
+
+    reg uses_rs1;
+    reg uses_rs2;
+
+    assign opcode   = IFID_instruction[6:0];
+    assign IFID_rs1 = IFID_instruction[19:15];
+    assign IFID_rs2 = IFID_instruction[24:20];
+
+    /*
+        Determine whether the instruction currently in ID
+        actually uses rs1 and/or rs2.
+
+        This avoids false stalls for immediate instructions,
+        where bits [24:20] are part of the immediate rather
+        than an rs2 register address.
+    */
+
+    always @(*) begin
+        uses_rs1 = 1'b0;
+        uses_rs2 = 1'b0;
+
+        case (opcode)
+
+            // R-type:
+            // add, sub, and, or, xor, sll, srl, slt
+            7'b0110011: begin
+                uses_rs1 = 1'b1;
+                uses_rs2 = 1'b1;
+            end
+
+            // I-type arithmetic:
+            // addi, xori, etc.
+            7'b0010011: begin
+                uses_rs1 = 1'b1;
+                uses_rs2 = 1'b0;
+            end
+
+            // Load:
+            // lw rd, immediate(rs1)
+            7'b0000011: begin
+                uses_rs1 = 1'b1;
+                uses_rs2 = 1'b0;
+            end
+
+            // Store:
+            // sw rs2, immediate(rs1)
+            7'b0100011: begin
+                uses_rs1 = 1'b1;
+                uses_rs2 = 1'b1;
+            end
+
+            // Branch:
+            // beq, bne
+            7'b1100011: begin
+                uses_rs1 = 1'b1;
+                uses_rs2 = 1'b1;
+            end
+
+            // JALR, for future extension
+            7'b1100111: begin
+                uses_rs1 = 1'b1;
+                uses_rs2 = 1'b0;
+            end
+
+            // JAL does not use rs1 or rs2.
+            7'b1101111: begin
+                uses_rs1 = 1'b0;
+                uses_rs2 = 1'b0;
+            end
+
+            default: begin
+                uses_rs1 = 1'b0;
+                uses_rs2 = 1'b0;
+            end
+
+        endcase
+    end
+
+    /*
+        Load-use hazard:
+
+        The instruction currently in EX is a load
+
+        AND
+
+        its destination register is required by the instruction
+        currently in ID.
+    */
+
+    always @(*) begin
+        stall = 1'b0;
+
+        if (
+            IDEX_MemRead &&
+            (IDEX_rd != 5'b0) &&
+            (
+                (uses_rs1 && (IDEX_rd == IFID_rs1)) ||
+                (uses_rs2 && (IDEX_rd == IFID_rs2))
+            )
+        ) begin
+            stall = 1'b1;
+        end
+    end
+
+endmodule
