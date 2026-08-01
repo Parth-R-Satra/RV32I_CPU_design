@@ -1,0 +1,82 @@
+`timescale 1ns / 1ps
+
+module mult_cpu(
+    input wire clk,
+    input wire rst
+);
+
+wire [7:0] uPC;
+
+wire [6:0] opcode;
+wire [2:0] funct3;
+wire [6:0] funct7;
+wire zero;
+wire busy;
+
+wire IRLd;
+wire [2:0] RegSel;
+wire RegWr;
+wire RegEn;
+wire ALd;
+wire BLd;
+wire [2:0] ALUOp;
+wire ALUEn;
+wire MALd;
+wire MemWr;
+wire MemEn;
+wire [2:0] ImmSel;
+wire ImmEn;
+
+mult_seq SEQ (
+    .clk(clk),
+    .rst(rst),
+    .opcode(opcode),
+    .funct3(funct3),
+    .funct7(funct7),
+    .zero(zero),
+    .busy(busy),
+    .uPC(uPC)
+);
+
+mult_ctrl CTRL (
+    .uPC(uPC),
+    .IRLd(IRLd),
+    .RegSel(RegSel),
+    .RegWr(RegWr),
+    .RegEn(RegEn),
+    .ALd(ALd),
+    .BLd(BLd),
+    .ALUOp(ALUOp),
+    .ALUEn(ALUEn),
+    .MALd(MALd),
+    .MemWr(MemWr),
+    .MemEn(MemEn),
+    .ImmSel(ImmSel),
+    .ImmEn(ImmEn)
+);
+
+   datapath DP (
+    .clk(clk),
+    .rst(rst),
+    .IRLd(IRLd),
+    .RegSel(RegSel),
+    .RegWr(RegWr),
+    .RegEn(RegEn),
+    .ALd(ALd),
+    .BLd(BLd),
+    .ALUOp(ALUOp),
+    .ALUEn(ALUEn),
+    .MALd(MALd),
+    .MemWr(MemWr),
+    .MemEn(MemEn),
+    .ImmSel(ImmSel),
+    .ImmEn(ImmEn),
+
+    .opcode(opcode),
+    .funct3(funct3),
+    .funct7(funct7),
+    .zero(zero),
+    .busy(busy)
+);
+
+endmodule
