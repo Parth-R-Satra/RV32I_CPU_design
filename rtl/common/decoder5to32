@@ -1,0 +1,12 @@
+`timescale 1ns / 1ps
+
+
+module decoder5to32(
+ input [4:0]rd,
+ input reg_we,
+ output [31:0] out
+    );
+    
+    assign #1 out = reg_we?(32'b1 << rd):(32'b0);
+    
+endmodule
